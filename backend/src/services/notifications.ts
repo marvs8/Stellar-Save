@@ -9,10 +9,12 @@
  */
 
 import * as sgMail from '@sendgrid/mail';
-import { prisma } from '../prisma_client';
-import { logger } from '../logger';
+
 import { config } from '../config';
+import { logger } from '../logger';
 import { calculateReminderSchedules } from './reminder_scheduler';
+import { notificationPreferenceRepository } from '../modules/notifications/notification-preference.repository';
+import { prisma } from '../prisma_client';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -132,13 +134,16 @@ export async function sendContributionReminder(
   const appUrl = config.urls.app;
 
   try {
-    const prefs = await prisma.notificationPreference.findUnique({
-      where: { userId: member.userId },
-    });
+    const prefs = await notificationPreferenceRepository.findByUserId(member.userId);
 
     if (prefs && (!prefs.emailNotifications || !prefs.contributionReminders)) {
       logger.info('Skipping reminder — user opted out', { userId: member.userId, groupId });
-      return { memberId: member.userId, email: member.email, status: 'skipped', reason: 'opted_out' };
+      return {
+        memberId: member.userId,
+        email: member.email,
+        status: 'skipped',
+        reason: 'opted_out',
+      };
     }
 
     const unsubscribeUrl = prefs
@@ -173,7 +178,12 @@ export async function sendContributionReminder(
 
     if (!apiKey) {
       logger.warn('SENDGRID_API_KEY not set — skipping send', { userId: member.userId });
-      return { memberId: member.userId, email: member.email, status: 'skipped', reason: 'no_api_key' };
+      return {
+        memberId: member.userId,
+        email: member.email,
+        status: 'skipped',
+        reason: 'no_api_key',
+      };
     }
 
     sgMail.setApiKey(apiKey);
@@ -204,11 +214,20 @@ export async function sendContributionReminder(
       },
     });
 
-    logger.info('Contribution reminder sent', { userId: member.userId, groupId, window, messageId });
+    logger.info('Contribution reminder sent', {
+      userId: member.userId,
+      groupId,
+      window,
+      messageId,
+    });
     return { memberId: member.userId, email: member.email, status: 'sent', messageId };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    logger.error('Failed to send contribution reminder', { userId: member.userId, groupId, error: reason });
+    logger.error('Failed to send contribution reminder', {
+      userId: member.userId,
+      groupId,
+      error: reason,
+    });
 
     await prisma.notification
       .create({
@@ -247,9 +266,7 @@ export async function scheduleContributionReminders(
 
   for (const member of members) {
     // Fetch user preferences if available to pass to pure scheduler
-    const prefsRecord = await prisma.notificationPreference.findUnique({
-      where: { userId: member.userId },
-    });
+    const prefsRecord = await notificationPreferenceRepository.findByUserId(member.userId);
 
     const slots = calculateReminderSchedules({
       deadline,
